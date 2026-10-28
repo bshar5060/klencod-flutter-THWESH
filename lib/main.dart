@@ -1,125 +1,65 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:sqflite/sqflite.dart';
-import 'package:path/path.dart';
-import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-void main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const JamiaApp());
 }
 
-// --- قاعدة البيانات المحلية (Database Helper) ---
-class DatabaseHelper {
-  static final DatabaseHelper instance = DatabaseHelper._init();
-  static Database? _database;
+// --- نظام التخزين المحلي البسيط باستخدام SharedPreferences ---
+class LocalStorage {
+  static const String _keySettings = 'settings';
+  static const String _keyMembers = 'members';
+  static const String _keyPayments = 'payments';
 
-  DatabaseHelper._init();
-
-  Future<Database> get database async {
-    if (_database != null) return _database!;
-    _database = await _initDB('jamia.db');
-    return _database!;
+  // الإعدادات الافتراضية
+  static Future<Map<String, dynamic>> getSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    String? data = prefs.getString(_keySettings);
+    if (data == null) {
+      final defaultSettings = {
+        'daily_amount': 5,
+        'password': '123',
+        'start_date': DateTime.now().toIso8601String().split('T')[0],
+      };
+      await saveSettings(defaultSettings);
+      return defaultSettings;
+    }
+    return jsonDecode(data);
   }
 
-  Future<Database> _initDB(String filePath) async {
-    final dbPath = await getDatabasesPath();
-    final path = join(dbPath, filePath);
-
-    return await openDatabase(
-      path,
-      version: 1,
-      onCreate: _createDB,
-    );
+  static Future<void> saveSettings(Map<String, dynamic> settings) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keySettings, jsonEncode(settings));
   }
 
-  Future _createDB(Database db, int version) async {
-    await db.execute('''
-      CREATE TABLE settings (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        daily_amount INTEGER NOT NULL,
-        password TEXT NOT NULL,
-        start_date TEXT NOT NULL
-      )
-    ''');
-
-    await db.execute('''
-      CREATE TABLE members (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL
-      )
-    ''');
-
-    await db.execute('''
-      CREATE TABLE payments (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        member_id INTEGER NOT NULL,
-        amount INTEGER NOT NULL,
-        payment_date TEXT NOT NULL,
-        FOREIGN KEY (member_id) REFERENCES members (id) ON DELETE CASCADE
-      )
-    ''');
-
-    await db.insert('settings', {
-      'daily_amount': 5,
-      'password': '123',
-      'start_date': DateTime.now().toIso8601String(),
-    });
+  // الأعضاء
+  static Future<List<Map<String, dynamic>>> getMembers() async {
+    final prefs = await SharedPreferences.getInstance();
+    String? data = prefs.getString(_keyMembers);
+    if (data == null) return [];
+    List decoded = jsonDecode(data);
+    return decoded.map((e) => Map<String, dynamic>.from(e)).toList();
   }
 
-  Future<Map<String, dynamic>> getSettings() async {
-    final db = await instance.database;
-    final result = await db.query('settings');
-    return result.first;
+  static Future<void> saveMembers(List<Map<String, dynamic>> members) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keyMembers, jsonEncode(members));
   }
 
-  Future<void> updateSettings(int dailyAmount, String password) async {
-    final db = await instance.database;
-    await db.update(
-      'settings',
-      {'daily_amount': dailyAmount, 'password': password},
-      where: 'id = ?',
-      whereArgs: [1],
-    );
+  // الدفعات
+  static Future<List<Map<String, dynamic>>> getPayments() async {
+    final prefs = await SharedPreferences.getInstance();
+    String? data = prefs.getString(_keyPayments);
+    if (data == null) return [];
+    List decoded = jsonDecode(data);
+    return decoded.map((e) => Map<String, dynamic>.from(e)).toList();
   }
 
-  Future<List<Map<String, dynamic>>> getMembers() async {
-    final db = await instance.database;
-    return await db.query('members');
-  }
-
-  Future<int> addMember(String name) async {
-    final db = await instance.database;
-    return await db.insert('members', {'name': name});
-  }
-
-  Future<int> deleteMember(int id) async {
-    final db = await instance.database;
-    await db.delete('payments', where: 'member_id = ?', whereArgs: [id]);
-    return await db.delete('members', where: 'id = ?', whereArgs: [id]);
-  }
-
-  Future<List<Map<String, dynamic>>> getPaymentsForMember(int memberId) async {
-    final db = await instance.database;
-    return await db.query(
-      'payments',
-      where: 'member_id = ?',
-      whereArgs: [memberId],
-      orderBy: 'payment_date DESC',
-    );
-  }
-
-  Future<int> addPayment(int memberId, int amount, String date) async {
-    final db = await instance.database;
-    return await db.insert('payments', {
-      'member_id': memberId,
-      'amount': amount,
-      'payment_date': date,
-    });
-  }
-
-  Future<int> deletePayment(int id) async {
-    final db = await instance.database;
-    return await db.delete('payments', where: 'id = ?', whereArgs: [id]);
+  static Future<void> savePayments(List<Map<String, dynamic>> payments) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_keyPayments, jsonEncode(payments));
   }
 }
 
@@ -140,6 +80,7 @@ class JamiaApp extends StatelessWidget {
   }
 }
 
+// --- شاشة تسجيل الدخول ---
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
@@ -159,7 +100,7 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   void _loadSettings() async {
-    final settings = await DatabaseHelper.instance.getSettings();
+    final settings = await LocalStorage.getSettings();
     setState(() {
       _savedPassword = settings['password'];
       _isLoading = false;
@@ -190,8 +131,7 @@ class _LoginScreenState extends State<LoginScreen> {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const Text('أدخل كلمة المرور الخاصة بلوحة التحكم',
-                      style: TextStyle(fontSize: 16)),
+                  const Text('أدخل كلمة المرور الخاصة بلوحة التحكم', style: TextStyle(fontSize: 16)),
                   const SizedBox(height: 20),
                   TextField(
                     controller: _passwordController,
@@ -213,6 +153,7 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 }
 
+// --- الشاشة الرئيسية ---
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -223,6 +164,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   List<Map<String, dynamic>> _members = [];
   Map<String, dynamic> _settings = {};
+  List<Map<String, dynamic>> _payments = [];
   bool _isLoading = true;
 
   @override
@@ -232,11 +174,13 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _refreshData() async {
-    final members = await DatabaseHelper.instance.getMembers();
-    final settings = await DatabaseHelper.instance.getSettings();
+    final members = await LocalStorage.getMembers();
+    final settings = await LocalStorage.getSettings();
+    final payments = await LocalStorage.getPayments();
     setState(() {
       _members = members;
       _settings = settings;
+      _payments = payments;
       _isLoading = false;
     });
   }
@@ -259,7 +203,9 @@ class _HomeScreenState extends State<HomeScreen> {
           ElevatedButton(
             onPressed: () async {
               if (controller.text.isNotEmpty) {
-                await DatabaseHelper.instance.addMember(controller.text);
+                int newId = _members.isEmpty ? 1 : (_members.last['id'] as int) + 1;
+                _members.add({'id': newId, 'name': controller.text});
+                await LocalStorage.saveMembers(_members);
                 Navigator.pop(context);
                 _refreshData();
               }
@@ -326,36 +272,28 @@ class _HomeScreenState extends State<HomeScreen> {
                           itemCount: _members.length,
                           itemBuilder: (context, index) {
                             final member = _members[index];
-                            return FutureBuilder<List<Map<String, dynamic>>>(
-                              future: DatabaseHelper.instance.getPaymentsForMember(member['id']),
-                              builder: (context, snapshot) {
-                                if (!snapshot.hasData) {
-                                  return const ListTile(title: Text('جاري التحميل...'));
-                                }
-                                final payments = snapshot.data!;
-                                int totalPaid = payments.fold(0, (sum, item) => sum + (item['amount'] as int));
-                                int expectedAmount = totalDays * dailyAmount;
-                                int arrears = expectedAmount - totalPaid;
-                                if (arrears < 0) arrears = 0;
+                            final memberPayments = _payments.where((p) => p['member_id'] == member['id']).toList();
+                            int totalPaid = memberPayments.fold(0, (sum, item) => sum + (item['amount'] as int));
+                            int expectedAmount = totalDays * dailyAmount;
+                            int arrears = expectedAmount - totalPaid;
+                            if (arrears < 0) arrears = 0;
 
-                                return ListTile(
-                                  title: Text(member['name'], style: const TextStyle(fontWeight: FontWeight.bold)),
-                                  subtitle: Text('المدفوع: $totalPaid ج.م | المتأخرات: $arrears ج.م'),
-                                  trailing: const Icon(Icons.arrow_forward_ios, size: 16),
-                                  onTap: () async {
-                                    await Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (context) => MemberDetailScreen(
-                                          memberId: member['id'],
-                                          memberName: member['name'],
-                                          dailyAmount: dailyAmount,
-                                        ),
-                                      ),
-                                    );
-                                    _refreshData();
-                                  },
+                            return ListTile(
+                              title: Text(member['name'], style: const TextStyle(fontWeight: FontWeight.bold)),
+                              subtitle: Text('المدفوع: $totalPaid ج.م | المتأخرات: $arrears ج.م'),
+                              trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+                              onTap: () async {
+                                await Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (context) => MemberDetailScreen(
+                                      memberId: member['id'],
+                                      memberName: member['name'],
+                                      dailyAmount: dailyAmount,
+                                    ),
+                                  ),
                                 );
+                                _refreshData();
                               },
                             );
                           },
@@ -371,6 +309,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
+// --- شاشة تفاصيل العضو والدفعات ---
 class MemberDetailScreen extends StatefulWidget {
   final int memberId;
   final String memberName;
@@ -398,9 +337,9 @@ class _MemberDetailScreenState extends State<MemberDetailScreen> {
   }
 
   void _loadPayments() async {
-    final payments = await DatabaseHelper.instance.getPaymentsForMember(widget.memberId);
+    final allPayments = await LocalStorage.getPayments();
     setState(() {
-      _payments = payments;
+      _payments = allPayments.where((p) => p['member_id'] == widget.memberId).toList();
       _isLoading = false;
     });
   }
@@ -425,8 +364,18 @@ class _MemberDetailScreenState extends State<MemberDetailScreen> {
             onPressed: () async {
               int? amount = int.tryParse(amountController.text);
               if (amount != null && amount > 0) {
-                String date = DateFormat('yyyy-MM-dd').format(DateTime.now());
-                await DatabaseHelper.instance.addPayment(widget.memberId, amount, date);
+                final allPayments = await LocalStorage.getPayments();
+                int newId = allPayments.isEmpty ? 1 : (allPayments.last['id'] as int) + 1;
+                String date = DateTime.now().toIso8601String().split('T')[0];
+
+                allPayments.add({
+                  'id': newId,
+                  'member_id': widget.memberId,
+                  'amount': amount,
+                  'payment_date': date,
+                });
+
+                await LocalStorage.savePayments(allPayments);
                 Navigator.pop(context);
                 _loadPayments();
               }
@@ -439,7 +388,14 @@ class _MemberDetailScreenState extends State<MemberDetailScreen> {
   }
 
   void _deleteMember() async {
-    await DatabaseHelper.instance.deleteMember(widget.memberId);
+    final members = await LocalStorage.getMembers();
+    members.removeWhere((m) => m['id'] == widget.memberId);
+    await LocalStorage.saveMembers(members);
+
+    final payments = await LocalStorage.getPayments();
+    payments.removeWhere((p) => p['member_id'] == widget.memberId);
+    await LocalStorage.savePayments(payments);
+
     Navigator.pop(context);
   }
 
@@ -483,7 +439,9 @@ class _MemberDetailScreenState extends State<MemberDetailScreen> {
                               trailing: IconButton(
                                 icon: const Icon(Icons.delete_outline, color: Colors.red),
                                 onPressed: () async {
-                                  await DatabaseHelper.instance.deletePayment(payment['id']);
+                                  final allPayments = await LocalStorage.getPayments();
+                                  allPayments.removeWhere((p) => p['id'] == payment['id']);
+                                  await LocalStorage.savePayments(allPayments);
                                   _loadPayments();
                                 },
                               ),
@@ -501,6 +459,7 @@ class _MemberDetailScreenState extends State<MemberDetailScreen> {
   }
 }
 
+// --- شاشة الإعدادات ---
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
 
@@ -520,7 +479,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   void _loadSettings() async {
-    final settings = await DatabaseHelper.instance.getSettings();
+    final settings = await LocalStorage.getSettings();
     setState(() {
       _dailyAmount = settings['daily_amount'];
       _passController.text = settings['password'];
@@ -529,7 +488,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   void _saveSettings() async {
-    await DatabaseHelper.instance.updateSettings(_dailyAmount, _passController.text);
+    final settings = await LocalStorage.getSettings();
+    settings['daily_amount'] = _dailyAmount;
+    settings['password'] = _passController.text;
+    await LocalStorage.saveSettings(settings);
     Navigator.pop(context);
   }
 
